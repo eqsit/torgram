@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="InuSystemAccountType" translatable="false">desu.inugram.debug</string>
+    <string name="InuDebugAppName">Inugram Debug</string>
+    <string name="AppNameBeta">Inugram Debug</string>
+    <string name="AppName">Inugram Debug</string>
+</resources>

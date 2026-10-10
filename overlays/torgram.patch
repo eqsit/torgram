@@ -1,0 +1,464 @@
+--- a/TMessagesProj/build.gradle
++++ b/TMessagesProj/build.gradle
+@@ -223,7 +223,7 @@
+         targetSdkVersion 36
+ 
+         ndk {
+-            abiFilters "arm64-v8a"
++            abiFilters(*rootProject.ext.inuAbis)
+         }
+ 
+         externalNativeBuild {
+--- a/TMessagesProj/config/debug/AndroidManifest_SDK23.xml
++++ b/TMessagesProj/config/debug/AndroidManifest_SDK23.xml
+@@ -29,7 +29,7 @@
+     <application
+         android:icon="@mipmap/ic_launcher"
+         android:roundIcon="@mipmap/ic_launcher_round"
+-        android:label="@string/AppNameBeta"
++        android:label="@string/InuDebugAppName"
+         android:theme="@style/Theme.TMessages.Start"
+         android:hardwareAccelerated="true"
+         android:largeHeap="true"
+--- a/TMessagesProj/google-services.json
++++ b/TMessagesProj/google-services.json
+@@ -28,7 +28,7 @@
+       "client_info": {
+         "mobilesdk_app_id": "1:1058545853294:android:d6b70c9beedf100745177f",
+         "android_client_info": {
+-          "package_name": "desu.inugram.beta"
++          "package_name": "desu.inugram.debug"
+         }
+       },
+       "oauth_client": [],
+@@ -45,4 +45,4 @@
+     }
+   ],
+   "configuration_version": "1"
+-}
+\ No newline at end of file
++}
+--- a/TMessagesProj/jni/CMakeLists.txt
++++ b/TMessagesProj/jni/CMakeLists.txt
+@@ -108,6 +108,7 @@
+         tgnet/Connection.cpp
+         tgnet/ConnectionSession.cpp
+         tgnet/ConnectionsManager.cpp
++        tgnet/InuAuthKeySession.cpp
+         tgnet/TLSHello.cpp
+         tgnet/ConnectionSocket.cpp
+         tgnet/Datacenter.cpp
+--- a/TMessagesProj/jni/TgNetWrapper.cpp
++++ b/TMessagesProj/jni/TgNetWrapper.cpp
+@@ -7,6 +7,7 @@
+ #include "tgnet/ConnectionSocket.h"
+ #include "tgnet/FileLog.h"
+ #include "tgnet/Handshake.h"
++#include "tgnet/InuAuthKeySession.h"
+ #include <openssl/rand.h>
+ #include <openssl/sha.h>
+ #include <openssl/bn.h>
+@@ -588,6 +589,7 @@
+ 
+ extern "C" int registerNativeTgNetFunctions(JavaVM *vm, JNIEnv *env) {
+     java = vm;
++    if (!InuAuthKeySession::registerNatives(env)) return JNI_FALSE;
+     
+     if (!registerNativeMethods(env, NativeByteBufferClassPathName, NativeByteBufferMethods, sizeof(NativeByteBufferMethods) / sizeof(NativeByteBufferMethods[0]))) {
+         return JNI_FALSE;
+--- a/TMessagesProj/jni/tgnet/ConnectionsManager.h
++++ b/TMessagesProj/jni/tgnet/ConnectionsManager.h
+@@ -267,6 +267,7 @@
+     friend class Config;
+     friend class FileLog;
+     friend class Handshake;
++    friend class InuAuthKeySession;
+ };
+ 
+ #ifdef ANDROID
+--- a/TMessagesProj/jni/tgnet/Datacenter.h
++++ b/TMessagesProj/jni/tgnet/Datacenter.h
+@@ -148,6 +148,7 @@
+     friend class ConnectionsManager;
+     friend class Connection;
+     friend class Handshake;
++    friend class InuAuthKeySession;
+     friend class Request;
+ };
+ 
+--- a/TMessagesProj/proguard-rules.pro
++++ b/TMessagesProj/proguard-rules.pro
+@@ -68,4 +68,8 @@
+ 
+ # Use -keep to explicitly keep any other classes shrinking would remove
+ #-dontoptimize
+-#-dontobfuscate
+\ No newline at end of file
++#-dontobfuscate
++# Native callbacks must retain their JVM names.
++-keep class desu.inugram.helpers.security.AuthKeySessionNative { *; }
++-keep interface desu.inugram.helpers.security.AuthKeySessionNative$Callback { *; }
++-keepclassmembers class * implements desu.inugram.helpers.security.AuthKeySessionNative$Callback { public void onResult(int, boolean, byte[], int); }
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/ContactsController.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/ContactsController.java
+@@ -391,7 +391,7 @@
+         Utilities.globalQueue.postRunnable(() -> {
+             AccountManager am = AccountManager.get(ApplicationLoader.applicationContext);
+             try {
+-                Account[] accounts = am.getAccountsByType("desu.inugram");
++                Account[] accounts = am.getAccountsByType(ApplicationLoader.applicationContext.getString(R.string.InuSystemAccountType));
+                 for (int a = 0; a < accounts.length; a++) {
+                     Account acc = accounts[a];
+                     boolean found = false;
+@@ -423,7 +423,7 @@
+                 readContacts();
+                 if (systemAccount == null) {
+                     try {
+-                        systemAccount = new Account("" + getUserConfig().getClientUserId(), "desu.inugram");
++                        systemAccount = new Account("" + getUserConfig().getClientUserId(), ApplicationLoader.applicationContext.getString(R.string.InuSystemAccountType));
+                         am.addAccountExplicitly(systemAccount, "", null);
+                     } catch (Exception ignore) {
+ 
+@@ -437,7 +437,7 @@
+         try {
+             systemAccount = null;
+             AccountManager am = AccountManager.get(ApplicationLoader.applicationContext);
+-            Account[] accounts = am.getAccountsByType("desu.inugram");
++            Account[] accounts = am.getAccountsByType(ApplicationLoader.applicationContext.getString(R.string.InuSystemAccountType));
+             for (int a = 0; a < accounts.length; a++) {
+                 Account acc = accounts[a];
+                 boolean found = false;
+@@ -513,7 +513,7 @@
+                 AndroidUtilities.runOnUIThread(() -> {
+                     AccountManager am = AccountManager.get(ApplicationLoader.applicationContext);
+                     try {
+-                        Account[] accounts = am.getAccountsByType("desu.inugram");
++                        Account[] accounts = am.getAccountsByType(ApplicationLoader.applicationContext.getString(R.string.InuSystemAccountType));
+                         systemAccount = null;
+                         for (int a = 0; a < accounts.length; a++) {
+                             Account acc = accounts[a];
+@@ -531,7 +531,7 @@
+ 
+                     }
+                     try {
+-                        systemAccount = new Account("" + getUserConfig().getClientUserId(), "desu.inugram");
++                        systemAccount = new Account("" + getUserConfig().getClientUserId(), ApplicationLoader.applicationContext.getString(R.string.InuSystemAccountType));
+                         am.addAccountExplicitly(systemAccount, "", null);
+                     } catch (Exception ignore) {
+ 
+--- a/TMessagesProj/src/main/java/org/telegram/ui/LoginActivity.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/LoginActivity.java
+@@ -321,6 +321,7 @@
+     private ArrayList<String> permissionsShowItems = new ArrayList<>();
+     private boolean checkPermissions = true;
+     private boolean checkShowPermissions = true;
++    public boolean inu_importAuthKey;
+     private boolean newAccount;
+     private boolean syncContacts = false;
+     private boolean testBackend = false;
+@@ -449,6 +450,21 @@
+                 postInvalidateOnAnimation();
+             }
+         }
++    }
++
++    @Override
++    public void onTransitionAnimationEnd(boolean isOpen, boolean backward) {
++        super.onTransitionAnimationEnd(isOpen, backward);
++        if (isOpen && !backward && inu_importAuthKey && desu.inugram.InuConfig.AUTH_KEY_SESSION_TRANSFER.getValue()) {
++            inu_importAuthKey = false;
++            desu.inugram.helpers.security.AuthKeySessionHelper.showImport(this, currentAccount);
++        }
++    }
++
++    @Override
++    public boolean dismissDialogOnPause(android.app.Dialog dialog) {
++        if (desu.inugram.helpers.security.AuthKeySessionHelper.keepsDialogOnPause(this, dialog)) return false;
++        return super.dismissDialogOnPause(dialog);
+     }
+ 
+     public LoginActivity() {
+@@ -497,6 +513,7 @@
+ 
+     @Override
+     public void onFragmentDestroy() {
++        desu.inugram.helpers.security.AuthKeySessionHelper.onLoginDestroyed(this);
+         super.onFragmentDestroy();
+         for (int a = 0; a < views.length; a++) {
+             if (views[a] != null) {
+@@ -1141,6 +1158,7 @@
+ 
+     @Override
+     public void onActivityResultFragment(int requestCode, int resultCode, Intent data) {
++        if (desu.inugram.helpers.security.AuthKeySessionHelper.onActivityResult(this, requestCode, resultCode, data)) return;
+         LoginActivityRegisterView registerView = (LoginActivityRegisterView) views[VIEW_REGISTER];
+         if (registerView != null) {
+             registerView.imageUpdater.onActivityResult(requestCode, resultCode, data);
+--- a/TMessagesProj/src/main/java/org/telegram/ui/LogoutActivity.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/LogoutActivity.java
+@@ -61,6 +61,7 @@
+     private int supportRow;
+     private int alternativeSectionRow;
+     private int logoutRow;
++    private int inu_localLogoutRow = -1;
+     private int logoutSectionRow;
+     private int rowCount;
+ 
+@@ -85,6 +86,7 @@
+         supportRow = rowCount++;
+         alternativeSectionRow = rowCount++;
+         logoutRow = rowCount++;
++        inu_localLogoutRow = desu.inugram.InuConfig.AUTH_KEY_SESSION_TRANSFER.getValue() ? rowCount++ : -1;
+         logoutSectionRow = rowCount++;
+ 
+         return true;
+@@ -147,6 +149,8 @@
+                 presentFragment(new ActionIntroActivity(ActionIntroActivity.ACTION_TYPE_CHANGE_PHONE_NUMBER));
+             } else if (position == supportRow) {
+                 showDialog(AlertsCreator.createSupportAlert(LogoutActivity.this, null));
++            } else if (inu_localLogoutRow >= 0 && position == inu_localLogoutRow) {
++                desu.inugram.helpers.security.AuthKeySessionHelper.showLocalLogout(this);
+             } else if (position == logoutRow) {
+                 if (getParentActivity() == null) {
+                     return;
+@@ -165,6 +169,9 @@
+         builder.setMessage(LocaleController.getString(R.string.AreYouSureLogout));
+         builder.setTitle(LocaleController.getString(R.string.LogOut));
+         builder.setPositiveButton(LocaleController.getString(R.string.LogOut), (dialogInterface, i) -> desu.inugram.helpers.security.BiometricHelper.gate(context, desu.inugram.InuConfig.BIOMETRIC_CONFIRM_LOGOUT.getValue(), () -> MessagesController.getInstance(currentAccount).performLogout(1)));
++        if (desu.inugram.InuConfig.AUTH_KEY_SESSION_TRANSFER.getValue()) {
++            builder.setNeutralButton(LocaleController.getString(R.string.InuSessionLocalLogout), (dialogInterface, i) -> desu.inugram.helpers.security.AuthKeySessionHelper.createLocalLogoutDialog(context, currentAccount).show());
++        }
+         builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+         AlertDialog alertDialog = builder.create();
+         TextView button = (TextView) alertDialog.getButton(DialogInterface.BUTTON_POSITIVE);
+@@ -229,14 +236,17 @@
+                     TextSettingsCell view = (TextSettingsCell) holder.itemView;
+                     if (position == logoutRow) {
+                         view.setTextColor(Theme.getColor(Theme.key_text_RedRegular));
+-                        view.setText(LocaleController.getString(R.string.LogOutTitle), false);
++                        view.setText(LocaleController.getString(R.string.LogOutTitle), inu_localLogoutRow >= 0);
++                    } else if (inu_localLogoutRow >= 0 && position == inu_localLogoutRow) {
++                        view.setTextColor(Theme.getColor(Theme.key_text_RedRegular));
++                        view.setText(LocaleController.getString(R.string.InuSessionLocalLogout), false);
+                     }
+                     break;
+                 }
+                 case 4: {
+                     TextInfoPrivacyCell view = (TextInfoPrivacyCell) holder.itemView;
+                     if (position == logoutSectionRow) {
+-                        view.setText(LocaleController.getString(R.string.LogOutInfo));
++                        view.setText(LocaleController.getString(R.string.LogOutInfo) + (inu_localLogoutRow >= 0 ? "\n\n" + LocaleController.getString(R.string.InuSessionLocalLogoutInfo) : ""));
+                     }
+                     break;
+                 }
+@@ -246,7 +256,7 @@
+         @Override
+         public boolean isEnabled(RecyclerView.ViewHolder holder) {
+             int position = holder.getAdapterPosition();
+-            return position == addAccountRow || position == passcodeRow || position == cacheRow || position == phoneRow || position == supportRow || position == logoutRow;
++            return position == addAccountRow || position == passcodeRow || position == cacheRow || position == phoneRow || position == supportRow || position == logoutRow || (inu_localLogoutRow >= 0 && position == inu_localLogoutRow);
+         }
+ 
+         @Override
+@@ -295,7 +305,7 @@
+                 return 1;
+             } else if (position == alternativeSectionRow) {
+                 return 2;
+-            } else if (position == logoutRow) {
++            } else if (position == logoutRow || (inu_localLogoutRow >= 0 && position == inu_localLogoutRow)) {
+                 return 3;
+             } else {
+                 return 4;
+--- a/TMessagesProj/src/main/java/org/telegram/ui/ProfileActivity.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/ProfileActivity.java
+@@ -2556,6 +2556,7 @@
+                 if (getParentActivity() == null) {
+                     return;
+                 }
++                if (desu.inugram.helpers.security.AuthKeySessionHelper.handleLocalLogoutClick(ProfileActivity.this, id)) return;
+                 if (desu.inugram.helpers.profile.ProfileHelper.handleMenuClick(id, otherItem, currentAccount, getDialogId())) {
+                     return;
+                 }
+@@ -3165,6 +3166,7 @@
+                             otherItem.showSubItem(edit_avatar);
+                             otherItem.showSubItem(delete_avatar);
+                             otherItem.hideSubItem(logout);
++                            desu.inugram.helpers.security.AuthKeySessionHelper.setLocalLogoutVisible(otherItem, false);
+                         }
+                     }
+                     currentExpanAnimatorFracture = 1.0f;
+@@ -8526,6 +8528,7 @@
+                                 otherItem.showSubItem(delete_avatar);
+                                 otherItem.hideSubItem(set_as_main);
+                                 otherItem.hideSubItem(logout);
++                                desu.inugram.helpers.security.AuthKeySessionHelper.setLocalLogoutVisible(otherItem, false);
+                             }
+                         }
+                         if (searchItem != null) {
+@@ -8623,6 +8626,7 @@
+                                 otherItem.hideSubItem(delete_avatar);
+                                 otherItem.showSubItem(add_photo);
+                                 otherItem.showSubItem(logout);
++                                desu.inugram.helpers.security.AuthKeySessionHelper.setLocalLogoutVisible(otherItem, true);
+ //                                otherItem.showSubItem(edit_name);
+                             }
+                         }
+@@ -12467,6 +12471,7 @@
+ 
+         if (selfUser && !myProfile) {
+             otherItem.addSubItem(logout, R.drawable.msg_leave, LocaleController.getString(R.string.LogOut));
++            desu.inugram.helpers.security.AuthKeySessionHelper.addLocalLogoutMenu(otherItem);
+         }
+         if (!isPulledDown) {
+             otherItem.hideSubItem(gallery_menu_save);
+--- a/TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/SettingsActivity.java
+@@ -298,6 +298,7 @@
+         actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
+             @Override
+             public void onItemClick(int id) {
++                if (desu.inugram.helpers.security.AuthKeySessionHelper.handleLocalLogoutClick(SettingsActivity.this, id)) return;
+                 if (id == -1) {
+                     finishFragment();
+                 } else if (id == 2) {
+@@ -343,6 +344,7 @@
+             otherItem.addSubItem(98, R.drawable.tabs_reorder, getString(R.string.InuReorderAccounts));
+         }
+         otherItem.addSubItem(2, R.drawable.msg_leave, getString(R.string.LogOut));
++        desu.inugram.helpers.security.AuthKeySessionHelper.addLocalLogoutMenu(otherItem);
+ 
+         search = new ProfileActivity.SearchAdapter(this, context) {
+             @Override
+--- a/TMessagesProj/src/main/java/org/telegram/ui/UserInfoActivity.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/UserInfoActivity.java
+@@ -447,6 +447,7 @@
+         }
+         logoutRow = items.size();
+         items.add(InfoCell.Factory.of(BUTTON_LOGOUT, R.drawable.msg_leave, getString(R.string.LogOut), null, 0).red());
++        if (desu.inugram.InuConfig.AUTH_KEY_SESSION_TRANSFER.getValue()) items.add(InfoCell.Factory.of(desu.inugram.helpers.security.AuthKeySessionHelper.LOCAL_LOGOUT_ACTION, R.drawable.msg_leave, getString(R.string.InuSessionLocalLogout), null, 0).red());
+         items.add(UItem.asShadow(-4, null));
+     }
+ 
+@@ -470,6 +471,7 @@
+ 
+     @Override
+     protected void onClick(UItem item, View view, int position, float x, float y) {
++        if (desu.inugram.helpers.security.AuthKeySessionHelper.handleLocalLogoutClick(this, item.id)) return;
+         if (item.id == BUTTON_ADD_ACCOUNT) {
+             int freeAccounts = 0;
+             Integer availableAccount = null;
+--- a/TMessagesProj/src/main/res/xml/auth.xml
++++ b/TMessagesProj/src/main/res/xml/auth.xml
+@@ -1,7 +1,7 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ 
+ <account-authenticator xmlns:android="http://schemas.android.com/apk/res/android"
+-    android:accountType="desu.inugram"
++    android:accountType="@string/InuSystemAccountType"
+     android:icon="@drawable/ic_launcher_dr"
+     android:smallIcon="@drawable/ic_launcher_dr"
+     android:label="@string/AppName"
+--- a/TMessagesProj/src/main/res/xml/sync_contacts.xml
++++ b/TMessagesProj/src/main/res/xml/sync_contacts.xml
+@@ -1,3 +1,3 @@
+ <sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
+     android:contentAuthority="com.android.contacts"
+-    android:accountType="desu.inugram"/>
+\ No newline at end of file
++    android:accountType="@string/InuSystemAccountType"/>
+\ No newline at end of file
+--- a/TMessagesProj_App/build.gradle
++++ b/TMessagesProj_App/build.gradle
+@@ -22,6 +22,9 @@
+ 
+ dependencies {
+     implementation project(':TMessagesProj')
++    androidTestImplementation project(':InuCore')
++    androidTestImplementation 'androidx.test:runner:1.6.2'
++    androidTestImplementation 'junit:junit:4.13.2'
+     implementation files('../TMessagesProj/libs/libgsaverification-client.aar')
+     implementation 'androidx.core:core:1.16.0'
+     if (!rootProject.ext.inuPluginless) {
+@@ -65,9 +68,9 @@
+     signingConfigs {
+         release {
+             storeFile file(System.getenv('RELEASE_KEYSTORE_PATH') ?: "../TMessagesProj/config/release.keystore")
+-            storePassword RELEASE_STORE_PASSWORD
+-            keyAlias RELEASE_KEY_ALIAS
+-            keyPassword RELEASE_KEY_PASSWORD
++            storePassword (System.getenv('RELEASE_STORE_PASSWORD') ?: RELEASE_STORE_PASSWORD)
++            keyAlias (System.getenv('RELEASE_KEY_ALIAS') ?: RELEASE_KEY_ALIAS)
++            keyPassword (System.getenv('RELEASE_KEY_PASSWORD') ?: RELEASE_KEY_PASSWORD)
+         }
+     }
+ 
+@@ -75,8 +78,8 @@
+         debug {
+             debuggable true
+             jniDebuggable true
+-            signingConfig signingConfigs.release
+-            applicationIdSuffix ".beta"
++            signingConfig signingConfigs.debug
++            applicationIdSuffix ".debug"
+             minifyEnabled false
+             shrinkResources false
+             multiDexEnabled true
+@@ -113,6 +116,7 @@
+     }
+ 
+     defaultConfig {
++        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+         buildConfigField "boolean", "INU_PLUGINLESS", rootProject.ext.inuPluginless.toString()
+         minSdkVersion 26
+         targetSdkVersion 36
+@@ -120,7 +124,7 @@
+         ndkVersion "29.0.14206865"
+ 
+         ndk {
+-            abiFilters "arm64-v8a"
++            abiFilters(*rootProject.ext.inuAbis)
+         }
+ 
+         if (!rootProject.ext.inuPluginless) externalNativeBuild {
+@@ -219,7 +223,7 @@
+             d.isDirectory() && d.listFiles()?.any { it.name ==~ /libclang\.(dylib|so)(\..*)?/ }
+         }
+         if (libclangDir != null) environment 'LIBCLANG_PATH', libclangDir
+-        commandLine cargoExe, 'ndk', '-t', 'arm64-v8a', '-o', outputDir.absolutePath, 'build', '--profile', cargoProfile
++        commandLine([cargoExe, 'ndk'] + rootProject.ext.inuAbis.collectMany { ['-t', it] } + ['-o', outputDir.absolutePath, 'build', '--profile', cargoProfile])
+     }
+ 
+     android.sourceSets[buildType].jniLibs.srcDirs += outputDir
+--- a/TMessagesProj_App/google-services.json
++++ b/TMessagesProj_App/google-services.json
+@@ -28,7 +28,7 @@
+       "client_info": {
+         "mobilesdk_app_id": "1:1058545853294:android:d6b70c9beedf100745177f",
+         "android_client_info": {
+-          "package_name": "desu.inugram.beta"
++          "package_name": "desu.inugram.debug"
+         }
+       },
+       "oauth_client": [],
+@@ -45,4 +45,4 @@
+     }
+   ],
+   "configuration_version": "1"
+-}
+\ No newline at end of file
++}
+--- a/build.gradle
++++ b/build.gradle
+@@ -62,9 +62,12 @@
+ 
+ ext {
+   inuPluginless = (findProperty('inu.pluginless') ?: inuBuildProperties.getProperty('inu.pluginless', 'false')).toBoolean()
++  inuAbis = (findProperty('inu.abis') ?: System.getenv('INU_ABIS') ?: 'arm64-v8a').split(',').collect { it.trim() }.findAll { it }.unique()
+   verName = "${APP_VERSION_NAME}${commitId != null ? "-${commitId.take(7)}" : ''}"
+   verCode = Integer.parseInt(System.getenv('INU_BUILD') ?: '1000000')
+   stockVerCode = Integer.parseInt(APP_VERSION_CODE)
+   buildDate = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ISO_DATE)
+   ccachePath = ['sh', '-c', 'command -v ccache'].execute().text.trim() ?: null
+ }
++
++if (!rootProject.ext.inuAbis || !rootProject.ext.inuAbis.every { it in ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64'] }) throw new GradleException('Unsupported inu.abis')

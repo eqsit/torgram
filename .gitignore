@@ -1,0 +1,17 @@
+node_modules/
+worktree/
+worktree-pluginless/
+src/native/target/
+src/core/build/
+sdk/cli/dist/
+out/
+*.log
+local.properties
+*.jks
+*.keystore
+*.p12
+release.json
+sdk/types/android.tl.d.ts
+sdk/types/tl-names.txt
+src/core/src/main/resources/tl_tables.txt
+src/res/assets/adguard_url_tracking.txt

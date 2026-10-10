@@ -1,0 +1,364 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alina sireneva <alina@tei.su>
+Date: Tue, 12 May 2026 14:58:17 +0200
+Subject: force system font for ui
+
+---
+ .../telegram/messenger/AndroidUtilities.java  |  6 ++
+ .../java/org/telegram/messenger/Emoji.java    |  4 +-
+ .../telegram/messenger/RichMessageLayout.java |  6 ++
+ .../telegram/ui/ActionBar/SimpleTextView.java |  1 +
+ .../java/org/telegram/ui/ActionBar/Theme.java |  3 +
+ .../telegram/ui/Cells/ProfileSearchCell.java  |  1 +
+ .../ui/Components/AnimatedEmojiSpan.java      |  1 +
+ .../ui/Components/AnimatedTextView.java       |  1 +
+ .../ui/Components/Paint/PaintTypeface.java    | 63 +++++++------------
+ .../Paint/Views/PaintTextOptionsView.java     |  5 +-
+ .../Components/Paint/Views/TextPaintView.java |  4 ++
+ .../org/telegram/ui/iv/RichAudioCell.java     |  1 +
+ .../org/telegram/ui/iv/RichBlockChrome.java   |  1 +
+ .../org/telegram/ui/iv/RichDocumentCell.java  |  1 +
+ .../java/org/telegram/ui/iv/RichMapCell.java  |  1 +
+ 15 files changed, 56 insertions(+), 43 deletions(-)
+
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java b/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/AndroidUtilities.java
+@@ -2390,7 +2390,13 @@ public class AndroidUtilities {
+     }
+ 
+     public static Typeface getTypeface(String assetPath) {
++        return inu_getTypeface(assetPath, false);
++    }
++
++    public static Typeface inu_getTypeface(String assetPath, boolean inu_forPaint) {
+         synchronized (typefaceCache) {
++            Typeface inu_override = inu_forPaint ? null : desu.inugram.helpers.font.FontHelper.onGetTypeface(typefaceCache, assetPath);
++            if (inu_override != null) return inu_override;
+             if (!typefaceCache.containsKey(assetPath)) {
+                 try {
+                     Typeface t;
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/Emoji.java b/TMessagesProj/src/main/java/org/telegram/messenger/Emoji.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/Emoji.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/Emoji.java
+@@ -590,6 +590,7 @@ public class Emoji {
+         if (SharedConfig.useSystemEmoji || cs == null || cs.length() == 0) {
+             return cs;
+         }
++        scale *= desu.inugram.helpers.font.FontHelper.getEmojiScale();
+         Spannable s;
+         if (!createNew && cs instanceof Spannable) {
+             s = (Spannable) cs;
+@@ -858,7 +859,8 @@ public class Emoji {
+                 getDrawable().setAlpha(paint.getAlpha());
+             }
+             boolean needRestore = false;
+-            float ty = emojiDrawingYOffset - (size - scale * size) / 2;
++            float ty = emojiDrawingYOffset - (size - scale * size) / 2
++                - desu.inugram.helpers.font.FontHelper.getEmojiBaselineOffset(fontMetrics);
+             if (ty != 0) {
+                 needRestore = true;
+                 canvas.save();
+diff --git a/TMessagesProj/src/main/java/org/telegram/messenger/RichMessageLayout.java b/TMessagesProj/src/main/java/org/telegram/messenger/RichMessageLayout.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/messenger/RichMessageLayout.java
++++ b/TMessagesProj/src/main/java/org/telegram/messenger/RichMessageLayout.java
+@@ -223,6 +223,8 @@ public class RichMessageLayout {
+         density = AndroidUtilities.density;
+         textPaint.setTextSize(dp(fontSize));
+         numTextPaint.setTextSize(dp(fontSize));
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(textPaint);
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(numTextPaint);
+     }
+ 
+     /** Uses the message renderer for editable inline buttons without laying out a message. */
+@@ -369,6 +371,8 @@ public class RichMessageLayout {
+         density = AndroidUtilities.density;
+         textPaint.setTextSize(dp(SharedConfig.fontSize));
+         numTextPaint.setTextSize(dp(SharedConfig.fontSize));
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(textPaint);
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(numTextPaint);
+         isPart = false;
+ 
+         richMessage = null;
+@@ -7452,6 +7456,7 @@ public class RichMessageLayout {
+             this.currentMessageObject = root.audioBlocks.get(block);
+             this.currentDocument = currentMessageObject != null ? currentMessageObject.getDocument() : null;
+             this.observerTag = DownloadController.getInstance(root.currentAccount).generateObserverTag();
++            desu.inugram.helpers.font.FontHelper.applyDefaultFont(audioTimePaint);
+ 
+             radialProgress = new RadialProgress2(null);
+             radialProgress.setCircleRadius(dp(24));
+@@ -7794,6 +7799,7 @@ public class RichMessageLayout {
+             this.previewX = root.padLeft + dp(10);
+             this.hasPreview = MessageObject.isDocumentHasThumb(document);
+             observerTag = DownloadController.getInstance(root.currentAccount).generateObserverTag();
++            desu.inugram.helpers.font.FontHelper.applyDefaultFont(sizePaint);
+             radialProgress = new RadialProgress2(null);
+             radialProgress.setCircleRadius(buttonSize / 2);
+             final int progressX = hasPreview ? previewX + (dp(86) - buttonSize) / 2 : buttonX;
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/SimpleTextView.java b/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/SimpleTextView.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/SimpleTextView.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/SimpleTextView.java
+@@ -145,6 +145,7 @@ public class SimpleTextView extends View implements Drawable.Callback {
+     public SimpleTextView(Context context) {
+         super(context);
+         textPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(textPaint);
+         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+     }
+ 
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/Theme.java b/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/Theme.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/Theme.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/ActionBar/Theme.java
+@@ -7973,6 +7973,7 @@ public class Theme {
+         dialogs_tagTextPaint.setTextSize(dp(10));
+         dialogs_searchNamePaint.setTextSize(dp(16));
+         dialogs_searchNameEncryptedPaint.setTextSize(dp(16));
++        desu.inugram.helpers.font.FontHelper.onThemePaintsCreated();
+     }
+ 
+     public static void applyDialogsTheme() {
+@@ -8225,6 +8226,7 @@ public class Theme {
+             addChatPaint(key_paint_chatComposeBackground, chat_composeBackgroundPaint, key_chat_messagePanelBackground);
+             addChatPaint(key_paint_chatTimeBackground, chat_timeBackgroundPaint, key_chat_mediaTimeBackground);
+         }
++        desu.inugram.helpers.font.FontHelper.onThemePaintsCreated();
+     }
+ 
+     public static void createChatResources(Context context, boolean fontsOnly) {
+@@ -8932,6 +8934,7 @@ public class Theme {
+         }
+ 
+         profile_aboutTextPaint.setTextSize(dp(16));
++        desu.inugram.helpers.font.FontHelper.onThemePaintsCreated();
+     }
+ 
+     private static ColorFilter currentShareColorFilter;
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Cells/ProfileSearchCell.java b/TMessagesProj/src/main/java/org/telegram/ui/Cells/ProfileSearchCell.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Cells/ProfileSearchCell.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Cells/ProfileSearchCell.java
+@@ -705,6 +705,7 @@ public class ProfileSearchCell extends BaseCell implements NotificationCenter.No
+         if (customPaints) {
+             if (statusPaint == null) {
+                 statusPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
++                desu.inugram.helpers.font.FontHelper.applyDefaultFont(statusPaint);
+             }
+             statusPaint.setTextSize(dp(callCellStyle ? 13f : 15));
+             if (currentStatusPaint == Theme.dialogs_offlinePaint) {
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedEmojiSpan.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedEmojiSpan.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedEmojiSpan.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedEmojiSpan.java
+@@ -1114,6 +1114,7 @@ public class AnimatedEmojiSpan extends ReplacementSpan {
+         private int cacheType = AnimatedEmojiDrawable.CACHE_TYPE_MESSAGES;
+         public TextViewEmojis(Context context) {
+             super(context);
++            desu.inugram.helpers.font.FontHelper.applyDefaultFont(this);
+         }
+ 
+         private ColorFilter emojiColorFilter;
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedTextView.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedTextView.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedTextView.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/AnimatedTextView.java
+@@ -174,6 +174,7 @@ public class AnimatedTextView extends View {
+             this.preserveIndex = preserveIndex;
+             this.startFromEnd = startFromEnd;
+             this.enforceByLetter = enforceByLetter;
++            desu.inugram.helpers.font.FontHelper.applyDefaultFont(textPaint);
+         }
+ 
+         public void setAllowCancel(boolean allowCancel) {
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/PaintTypeface.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/PaintTypeface.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/PaintTypeface.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/PaintTypeface.java
+@@ -33,16 +33,16 @@ import java.util.Set;
+ public class PaintTypeface {
+     private final static boolean SYSTEM_FONTS_ENABLED = true;
+ 
+-    public static final PaintTypeface ROBOTO_MEDIUM = new PaintTypeface("roboto", "PhotoEditorTypefaceRoboto", new LazyTypeface(() -> AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM)));
+-    public static final PaintTypeface ROBOTO_ITALIC = new PaintTypeface("italic", "PhotoEditorTypefaceItalic", new LazyTypeface(() -> AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM_ITALIC)));
++    public static final PaintTypeface ROBOTO_MEDIUM = new PaintTypeface("roboto", "PhotoEditorTypefaceRoboto", new LazyTypeface(() -> AndroidUtilities.inu_getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM, true)));
++    public static final PaintTypeface ROBOTO_ITALIC = new PaintTypeface("italic", "PhotoEditorTypefaceItalic", new LazyTypeface(() -> AndroidUtilities.inu_getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM_ITALIC, true)));
+     public static final PaintTypeface ROBOTO_SERIF = new PaintTypeface("serif", "PhotoEditorTypefaceSerif", new LazyTypeface(() -> Typeface.create("serif", Typeface.BOLD)));
+-    public static final PaintTypeface ROBOTO_CONDENSED = new PaintTypeface("condensed", "PhotoEditorTypefaceCondensed", new LazyTypeface(() -> AndroidUtilities.getTypeface("fonts/rcondensedbold.ttf")));
+-    public static final PaintTypeface ROBOTO_MONO = new PaintTypeface ("mono", "PhotoEditorTypefaceMono", new LazyTypeface(() -> AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MONO)));
+-    public static final PaintTypeface MW_BOLD = new PaintTypeface("mw_bold", "PhotoEditorTypefaceMerriweather", new LazyTypeface(() -> AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_MERRIWEATHER_BOLD)));
++    public static final PaintTypeface ROBOTO_CONDENSED = new PaintTypeface("condensed", "PhotoEditorTypefaceCondensed", new LazyTypeface(() -> AndroidUtilities.inu_getTypeface("fonts/rcondensedbold.ttf", true)));
++    public static final PaintTypeface ROBOTO_MONO = new PaintTypeface ("mono", "PhotoEditorTypefaceMono", new LazyTypeface(() -> AndroidUtilities.inu_getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MONO, true)));
++    public static final PaintTypeface MW_BOLD = new PaintTypeface("mw_bold", "PhotoEditorTypefaceMerriweather", new LazyTypeface(() -> AndroidUtilities.inu_getTypeface(AndroidUtilities.TYPEFACE_MERRIWEATHER_BOLD, true)));
+ 
+     public final static List<PaintTypeface> BUILT_IN_FONTS = Arrays.asList(ROBOTO_MEDIUM, ROBOTO_ITALIC, ROBOTO_SERIF, ROBOTO_CONDENSED, ROBOTO_MONO, MW_BOLD);
+ 
+-    private static final List<String> preferable = Arrays.asList(
++    public static final List<String> preferable = Arrays.asList(
+         "Google Sans",
+         "Dancing Script",
+         "Carrois Gothic SC",
+@@ -59,7 +59,7 @@ public class PaintTypeface {
+     private final Font font;
+     private Paint paint;
+ 
+-    private static class LazyTypeface {
++    public static class LazyTypeface {
+         public interface LazyTypefaceLoader {
+             Typeface load();
+         }
+@@ -87,6 +87,15 @@ public class PaintTypeface {
+         this.font = null;
+     }
+ 
++    public PaintTypeface(LazyTypeface lazyTypeface, String key, String name) {
++        this.key = key;
++        this.name = name;
++        this.nameKey = null;
++        this.typeface = null;
++        this.lazyTypeface = lazyTypeface;
++        this.font = null;
++    }
++
+     PaintTypeface(String key, String nameKey, LazyTypeface lazyTypeface) {
+         this.key = key;
+         this.nameKey = nameKey;
+@@ -140,7 +149,7 @@ public class PaintTypeface {
+         return LocaleController.getString(nameKey);
+     }
+ 
+-    private static List<PaintTypeface> typefaces;
++    public static List<PaintTypeface> typefaces;
+     public static boolean loadingTypefaces;
+ 
+     private static void load() {
+@@ -149,40 +158,12 @@ public class PaintTypeface {
+         }
+         loadingTypefaces = true;
+         Utilities.themeQueue.postRunnable(() -> {
+-            ArrayList<PaintTypeface> typefaces = new ArrayList<PaintTypeface>(BUILT_IN_FONTS);
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && SYSTEM_FONTS_ENABLED) {
+-                Set<Font> fonts = SystemFonts.getAvailableFonts();
+-                Iterator<Font> i = fonts.iterator();
+-                HashMap<String, Family> families = new HashMap<>();
+-                while (i.hasNext()) {
+-                    Font font = i.next();
+-                    if (font.getFile().getName().contains("Noto"))
+-                        continue;
+-                    FontData data = parseFont(font);
+-                    if (data != null) {
+-                        Family family = families.get(data.family);
+-                        if (family == null) {
+-                            family = new Family();
+-                            families.put(family.family = data.family, family);
+-                        }
+-                        family.fonts.add(data);
+-                    }
+-                }
+-
+-                for (String familyName : preferable) {
+-                    Family family = families.get(familyName);
+-                    if (family != null) {
+-                        FontData font = family.getBold();
+-                        if (font == null) {
+-                            font = family.getRegular();
+-                        }
+-                        if (font != null) {
+-                            typefaces.add(new PaintTypeface(font.font, font.getName()));
+-                        }
+-                    }
+-                }
+-            }
++            ArrayList<PaintTypeface> typefaces = new ArrayList<PaintTypeface>();
++            final int inu_gen = desu.inugram.helpers.font.FontLibrary.buildEditorRoster(typefaces);
+             AndroidUtilities.runOnUIThread(() -> {
++                if (!desu.inugram.helpers.font.FontLibrary.isRosterCurrent(inu_gen)) {
++                    return;
++                }
+                 PaintTypeface.typefaces = typefaces;
+                 loadingTypefaces = false;
+                 NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.customTypefacesLoaded);
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/PaintTextOptionsView.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/PaintTextOptionsView.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/PaintTextOptionsView.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/PaintTextOptionsView.java
+@@ -218,9 +218,12 @@ public class PaintTextOptionsView extends FrameLayout implements NotificationCen
+         for (PaintTypeface typeface : PaintTypeface.get()) {
+             if (typeface.getKey().equals(key)) {
+                 typefaceCell.bind(typeface);
+-                break;
++                return;
+             }
+         }
++        if (PaintTypeface.typefaces != null && !PaintTypeface.get().isEmpty()) {
++            typefaceCell.bind(PaintTypeface.get().get(0));
++        }
+     }
+ 
+     public void setDelegate(Delegate delegate) {
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/TextPaintView.java b/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/TextPaintView.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/TextPaintView.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/Components/Paint/Views/TextPaintView.java
+@@ -270,6 +270,10 @@ public class TextPaintView extends EntityView {
+                 break;
+             }
+         }
++        if (!found && PaintTypeface.typefaces != null && !PaintTypeface.get().isEmpty()) {
++            setTypeface(PaintTypeface.get().get(0));
++            found = true;
++        }
+         lastTypefaceKey = found ? null : key;
+         updateSelectionView();
+     }
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichAudioCell.java b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichAudioCell.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichAudioCell.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichAudioCell.java
+@@ -96,6 +96,7 @@ public class RichAudioCell extends RichBlockCell
+         setWillNotDraw(false);
+ 
+         observerTag = DownloadController.getInstance(currentAccount).generateObserverTag();
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(audioTimePaint);
+ 
+         radialProgress = new RadialProgress2(this, resourcesProvider);
+         radialProgress.setCircleRadius(dp(24));
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichBlockChrome.java b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichBlockChrome.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichBlockChrome.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichBlockChrome.java
+@@ -157,5 +157,6 @@ public class RichBlockChrome {
+     public RichBlockChrome() {
+         markerPaint.setTextSize(dp(16));
+         markerPaint.setTextAlign(Paint.Align.CENTER);
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(markerPaint);
+     }
+ }
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichDocumentCell.java b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichDocumentCell.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichDocumentCell.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichDocumentCell.java
+@@ -89,6 +89,7 @@ public class RichDocumentCell extends RichBlockCell implements Theme.Colorable,
+         setWillNotDraw(false);
+         setMinimumHeight(dp(66));
+         observerTag = DownloadController.getInstance(currentAccount).generateObserverTag();
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(sizePaint);
+         radialProgress = new RadialProgress2(this, resourcesProvider);
+         radialProgress.setCircleRadius(dp(24));
+         radialProgress.setProgressRect(buttonX, buttonY, buttonX + buttonSize, buttonY + buttonSize);
+diff --git a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichMapCell.java b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichMapCell.java
+index 0000000..0000000 100644
+--- a/TMessagesProj/src/main/java/org/telegram/ui/iv/RichMapCell.java
++++ b/TMessagesProj/src/main/java/org/telegram/ui/iv/RichMapCell.java
+@@ -76,6 +76,7 @@ public class RichMapCell extends RichBlockCell
+ 
+         hintPaint.setTextSize(dp(15));
+         hintPaint.setTextAlign(Paint.Align.CENTER);
++        desu.inugram.helpers.font.FontHelper.applyDefaultFont(hintPaint);
+ 
+         imageReceiver = new ImageReceiver(this);
+ 

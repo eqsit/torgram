@@ -1,0 +1,419 @@
+import { existsSync } from 'node:fs'
+import fs from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { glob } from 'tinyglobby'
+import { $, chalk } from 'zx'
+import {
+  forkSyncFiles,
+  rootDir,
+  seriesFile,
+  skippedSubmodules,
+  submodulePatches,
+  upstreamCommitFile,
+  upstreamUrl,
+} from './config.js'
+
+$.verbose = false
+
+export function step(message: string) {
+  console.log(`${chalk.blue('==>')} ${message}`)
+}
+
+export function success(message: string) {
+  console.log(`${chalk.green('ok')} ${message}`)
+}
+
+export function warn(message: string) {
+  console.log(`${chalk.yellow('warn')} ${message}`)
+}
+
+export function cd(cwd: string) {
+  return $({ cwd })
+}
+
+export function resolveFromRoot(input: string | undefined, fallback?: string) {
+  if (!input) {
+    if (fallback) {
+      return fallback
+    }
+    throw new Error('Missing required path argument')
+  }
+  return isAbsolute(input) ? input : resolve(rootDir, input)
+}
+
+export async function readPinnedUpstreamCommit() {
+  const value = (await fs.readFile(upstreamCommitFile, 'utf8')).trim()
+  if (!/^[0-9a-f]{7,40}$/i.test(value)) {
+    throw new Error(`Set ${relative(rootDir, upstreamCommitFile)} to a real commit hash first`)
+  }
+  return value
+}
+
+export async function writePinnedUpstreamCommit(commit: string) {
+  await fs.writeFile(upstreamCommitFile, `${commit}\n`)
+}
+
+export async function ensureEmptyCloneTarget(targetDir: string) {
+  if (!existsSync(targetDir)) {
+    return
+  }
+  const entries = await fs.readdir(targetDir)
+  if (entries.length > 0 && !entries.includes('.git')) {
+    throw new Error(`Target exists and is not empty: ${targetDir}`)
+  }
+}
+
+export async function ensureDir(dir: string) {
+  await fs.mkdir(dir, { recursive: true })
+}
+
+export async function cloneUpstream(targetDir: string, commit: string, shallow = false) {
+  await ensureEmptyCloneTarget(targetDir)
+  if (shallow) {
+    step(`Fetching upstream ${commit} into ${targetDir}`)
+    await ensureDir(targetDir)
+    const git = cd(targetDir)
+    await git`git init -q`
+    await git`git remote add upstream ${upstreamUrl}`
+    await git`git fetch --depth 1 upstream ${commit}`
+    await git`git checkout FETCH_HEAD`
+    return
+  }
+  if (!existsSync(join(targetDir, '.git'))) {
+    step(`Cloning upstream into ${targetDir}`)
+    await $`git clone ${upstreamUrl} ${targetDir}`
+  } else {
+    step(`Reusing existing checkout in ${targetDir}`)
+  }
+  await ensureUpstreamRemote(targetDir)
+  const git = cd(targetDir)
+  step(`Checking out ${commit}`)
+  await git`git checkout ${commit}`
+}
+
+export async function ensureUpstreamRemote(repoDir: string) {
+  const git = cd(repoDir)
+  const remotes = (await git`git remote`)
+    .stdout
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  if (remotes.includes('upstream')) {
+    return
+  }
+
+  if (remotes.includes('origin')) {
+    step('Renaming origin remote to upstream')
+    await git`git remote rename origin upstream`
+    return
+  }
+
+  step('Adding upstream remote')
+  await git`git remote add upstream ${upstreamUrl}`
+}
+
+export async function syncSubmodules(repoDir: string, excludedSubmodules: string[] = [], shallow = false) {
+  if (!existsSync(join(repoDir, '.gitmodules'))) {
+    return false
+  }
+
+  const git = cd(repoDir)
+  const paths = ['.', ...excludedSubmodules.map(path => `:(exclude)${path}`)]
+  // status prefixes: ' ' in sync, '-' uninitialized, '+' sha mismatch, 'U' conflicted
+  const stale = (await git`git submodule status -- ${paths}`)
+    .stdout
+    .split(/\r?\n/)
+    .filter(line => line.length > 0 && line[0] !== ' ')
+
+  if (stale.length === 0) {
+    return false
+  }
+
+  step(`Syncing ${stale.length} submodule(s), this will take a while`)
+  const skips = skippedSubmodules.flatMap(name => ['-c', `submodule.${name}.update=none`])
+  const depth = shallow ? ['--depth', '1'] : ['--filter=blob:none']
+  await git`git ${skips} submodule update --init --recursive ${depth} -- ${paths}`
+  return true
+}
+
+export async function applySubmodulePatches(repoDir: string, excludedSubmodules: string[] = []) {
+  let appliedAny = false
+
+  for (const { submodule, patch } of submodulePatches) {
+    if (excludedSubmodules.includes(submodule)) continue
+    const dir = join(repoDir, submodule)
+    if (!existsSync(dir)) continue
+
+    const git = cd(dir)
+    const alreadyApplied = await git`git apply --reverse --check ${patch}`.nothrow().quiet()
+    if (alreadyApplied.exitCode === 0) continue
+
+    step(`Patching ${submodule}`)
+    await git`git apply ${patch}`
+    appliedAny = true
+  }
+
+  return appliedAny
+}
+
+export function hasGitRepo(repoDir: string) {
+  return existsSync(join(repoDir, '.git'))
+}
+
+export async function hasStgitStack(repoDir: string, branch: string) {
+  // resolve via git: the stack ref may be packed in .git/packed-refs
+  const result = await $({ cwd: repoDir, nothrow: true })`git show-ref --verify --quiet refs/stacks/${branch}`
+  return result.exitCode === 0
+}
+
+export async function getCurrentBranch(repoDir: string) {
+  const result = await $({ cwd: repoDir, nothrow: true })`git rev-parse --abbrev-ref HEAD`
+  if (result.exitCode !== 0) {
+    return null
+  }
+  return result.stdout.trim()
+}
+
+export async function hasLocalBranch(repoDir: string, branch: string) {
+  const result = await $({ cwd: repoDir, nothrow: true })`git show-ref --verify --quiet refs/heads/${branch}`
+  return result.exitCode === 0
+}
+
+async function isTrackedPath(repoDir: string, repoRelativePath: string) {
+  const result = await $({ cwd: repoDir, nothrow: true })`git ls-files --error-unmatch -- ${repoRelativePath}`
+  return result.exitCode === 0
+}
+
+async function ensureSkipWorktree(repoDir: string, repoRelativePath: string) {
+  if (!await isTrackedPath(repoDir, repoRelativePath)) {
+    return false
+  }
+
+  const status = (await $({ cwd: repoDir })`git ls-files -v -- ${repoRelativePath}`).stdout.trim()
+  if (status.startsWith('S ')) {
+    return true
+  }
+
+  step(`Marking ${repoRelativePath} as skip-worktree`)
+  await $({ cwd: repoDir })`git update-index --skip-worktree -- ${repoRelativePath}`
+  return true
+}
+
+async function ensureSymlink(targetPath: string, srcPath: string, type: 'dir' | 'file') {
+  await ensureDir(dirname(targetPath))
+
+  const stat = await fs.lstat(targetPath).catch(() => null)
+  if (stat) {
+    if (stat.isSymbolicLink()) {
+      const currentTarget = resolve(dirname(targetPath), await fs.readlink(targetPath))
+      if (currentTarget === srcPath) return false
+    }
+
+    await fs.rm(targetPath, { recursive: true, force: true })
+  }
+
+  await fs.symlink(relative(dirname(targetPath), srcPath), targetPath, type)
+  return true
+}
+
+interface ResolvedLink {
+  sourcePath: string
+  repoRelativeTarget: string
+  type: 'dir' | 'file'
+  replace?: boolean
+}
+
+async function linkForkEntry(repoDir: string, entry: ResolvedLink, skip = false) {
+  const targetPath = join(repoDir, entry.repoRelativeTarget)
+  if (skip) {
+    const stat = await fs.lstat(targetPath).catch(() => null)
+    if (!stat?.isSymbolicLink() || resolve(dirname(targetPath), await fs.readlink(targetPath)) !== entry.sourcePath) return false
+    await fs.unlink(targetPath)
+    return true
+  }
+  const created = await ensureSymlink(targetPath, entry.sourcePath, entry.type)
+  if (created) {
+    step(`Symlinking ${targetPath}`)
+  }
+
+  if (entry.replace && await ensureSkipWorktree(repoDir, entry.repoRelativeTarget)) {
+    return created
+  }
+
+  await ensureGitExclude(repoDir, entry.repoRelativeTarget)
+  return created
+}
+
+export async function linkForkSource(repoDir: string, pluginless = false) {
+  let dirty = false
+  const oldSourceRoot = join(repoDir, 'TMessagesProj/src/main/kotlin/desu/inugram')
+  const oldSourceStat = await fs.lstat(oldSourceRoot).catch(() => null)
+  if (oldSourceStat?.isSymbolicLink()
+    && resolve(dirname(oldSourceRoot), await fs.readlink(oldSourceRoot)) === join(rootDir, 'src/fork')) {
+    await fs.unlink(oldSourceRoot)
+    dirty = true
+  }
+
+  for (const entry of forkSyncFiles) {
+    if (entry.directory) {
+      const created = await linkForkEntry(repoDir, {
+        sourcePath: resolve(rootDir, entry.source),
+        repoRelativeTarget: entry.target,
+        type: 'dir',
+        replace: entry.replace,
+      }, pluginless && entry.pluginsOnly)
+      dirty ||= created
+      continue
+    }
+
+    const matches = await glob(entry.source, { cwd: rootDir, absolute: true, onlyFiles: true })
+    for (const sourcePath of matches) {
+      const created = await linkForkEntry(repoDir, {
+        sourcePath,
+        repoRelativeTarget: join(entry.target, basename(sourcePath)),
+        type: 'file',
+        replace: entry.replace,
+      }, pluginless && entry.pluginsOnly)
+      dirty ||= created
+    }
+  }
+
+  return dirty
+}
+
+export async function ensureGitExclude(repoDir: string, repoRelativePath: string) {
+  const excludeFile = join(repoDir, '.git', 'info', 'exclude')
+  const entry = repoRelativePath.replaceAll('\\', '/')
+  const current = await fs.readFile(excludeFile, 'utf8').catch(() => '')
+  const lines = current.split(/\r?\n/)
+
+  if (lines.includes(entry)) {
+    return
+  }
+
+  step(`Adding ${entry} to .git/info/exclude`)
+  const next = current.length === 0 || current.endsWith('\n')
+    ? `${current}${entry}\n`
+    : `${current}\n${entry}\n`
+  await fs.writeFile(excludeFile, next)
+}
+
+function normalizeSeriesLine(line: string) {
+  const trimmed = line.trim()
+  if (!trimmed) {
+    return ''
+  }
+  return trimmed.replace(/^[+>!-]\s+/, '')
+}
+
+async function getPatchNames(repoDir: string, mode: '--applied' | '--all') {
+  const stg = cd(repoDir)
+  const out = await stg`stg series ${mode}`
+  return out.stdout
+    .split(/\r?\n/)
+    .map(normalizeSeriesLine)
+    .map(line => line.trim())
+    .filter(Boolean)
+}
+
+export async function getAppliedPatchNames(repoDir: string) {
+  return await getPatchNames(repoDir, '--applied')
+}
+
+export async function getAllPatchNames(repoDir: string) {
+  return await getPatchNames(repoDir, '--all')
+}
+
+export function patchNameFromSeriesEntry(entry: string) {
+  const normalized = entry.trim().replaceAll('\\', '/')
+  const match = normalized.match(/^([^/]+)\/(.+)\.patch$/)
+  if (!match) {
+    throw new Error(`Invalid series entry: ${entry}`)
+  }
+  return `${match[1]}__${match[2]}`
+}
+
+export async function getTopPatch(repoDir: string) {
+  const result = await $({ cwd: repoDir, nothrow: true })`stg top`
+  if (result.exitCode !== 0) {
+    return null
+  }
+  return result.stdout.trim()
+}
+
+export async function getPatchCommitId(repoDir: string, patchName: string) {
+  return (await cd(repoDir)`stg id ${patchName}`).stdout.trim()
+}
+
+export async function getPatchSubject(repoDir: string, patchName: string) {
+  const commitId = await getPatchCommitId(repoDir, patchName)
+  return (await cd(repoDir)`git log -1 --format=%s ${commitId}`).stdout.trim()
+}
+
+export async function generateStablePatchFromCommit(repoDir: string, commitId: string) {
+  const patch = await cd(repoDir)`git format-patch --stdout --ignore-submodules=none --zero-commit --no-signature --subject-prefix= -1 ${commitId}`
+  return patch.stdout
+    .replace(/^index [0-9a-f]+\.\.[0-9a-f]+( \d+)?$/gm, 'index 0000000..0000000$1')
+    .replace(/^Subject:.*(?:\n[ \t].*)+/m, m => m.replace(/\n[ \t]+/g, ' '))
+}
+
+export async function getAllPatchCommitIds(repoDir: string) {
+  const branch = (await cd(repoDir)`git symbolic-ref --short HEAD`).stdout.trim()
+  const format = '%(refname) %(objectname)'
+  const out = await cd(repoDir)`git for-each-ref --format=${format} refs/patches/${branch}/`
+  const prefix = `refs/patches/${branch}/`
+  const map = new Map<string, string>()
+  for (const line of out.stdout.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const [ref, sha] = trimmed.split(' ')
+    if (!ref.startsWith(prefix)) continue
+    map.set(ref.slice(prefix.length), sha)
+  }
+  return map
+}
+
+export function parsePatchName(patchName: string) {
+  const parts = patchName.split('__').map(part => part.trim()).filter(Boolean)
+  if (parts.length !== 2) {
+    throw new Error(`Patch name must use "group__name": ${patchName}`)
+  }
+  const [group, name] = parts
+  return {
+    group,
+    name,
+    seriesEntry: `${group}/${name}.patch`,
+  }
+}
+
+export async function writeSeries(entries: string[]) {
+  await fs.writeFile(seriesFile, entries.length > 0 ? `${entries.join('\n')}\n` : '')
+  step(`Wrote ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} to series`)
+}
+
+export async function readSeries() {
+  const raw = await fs.readFile(seriesFile, 'utf8').catch(() => '')
+  return raw
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+}
+
+export async function resolvePatchName(repoDir: string, identifier: string) {
+  const patchNames = await getAllPatchNames(repoDir)
+  const direct = patchNames.find(patchName => patchName === identifier)
+  if (direct) {
+    return direct
+  }
+
+  const fallback = identifier.includes('/')
+    ? patchNames.find(patchName => patchName === identifier.replace('/', '__'))
+    : null
+
+  if (fallback) {
+    return fallback
+  }
+
+  throw new Error(`Unknown patch identifier: ${identifier}`)
+}
